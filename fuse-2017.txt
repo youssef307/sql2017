@@ -1,0 +1,348 @@
+
+
+
+
+
+
+---Scenario 1:
+----	There was an error in the order entry system that caused duplicate order lines to get entered into the database. Remove the duplicate order lines.
+-----BONUS: Modify the database so that this error cannot happen again
+		
+		
+		
+		
+	/* One way they can occur is if duplicate PKs exist in non-relational data outside SQL Server, and the data is imported while PK uniqueness is not being enforced. Another way they can occur is through a database design error, such as not enforcing entity integrity on each table.
+	
+		>> The first question is very unclear on which columns or tables have the duplicated records.
+		
+		>> i.e. records which have the same MemberID and GroupID
+		in this case, we can do the following:
+		Open the table for editing.
+
+Tools> Index Design...
+Add a new index, give it a name, mark it as unique and add the 2 FIELDS.
+Save the index.	
+		
+---- CREATE UNIQUE INDEX "UniqueGroupMembers" ON "Table_Name" ("MemberID","GroupID");
+		
+		
+*/
+
+
+
+
+/* There are different methods for deleting duplicate records from a table, each of them has its own pros and cons.
+
+--Using correlated subquery
+--Using temporary table
+--Creating new table with distinct records and renaming it..
+--Using Common Table Expression (CTE)
+--Using Fuzzy Group Transformation in SSIS
+
+
+ --You can identify duplicates using GROUP BY and HAVING
+ 
+ OR
+ 
+ --Using a cursor
+ 
+   The basic idea is to order the contents of the table, iterate through the ordered rows, and check if the current row is equal to the previous row. If it does, then delete the row.
+ 
+*/
+
+/*
+
+There are 2 cases.
+
+The first case is when a SQL Server table has a primary key (or unique index) and one of the columns contains duplicate values.
+
+The second case is that table does not have a primary key or any unique indexes and contains duplicate rows which should be removed.  
+
+Since the first scenario is not clear about which table/ column to choose from, I picked this table SalesOrderDetailStaging  
+the primary is on SalesOrderDetailID with a Unique index 
+
+*/
+
+------------------------------------ "First solution" 
+
+
+----- Finding duplicate values in a table with a unique index
+select a.*
+
+from [Sales].[SalesOrderDetailStaging] a
+inner join
+( select max([SalesOrderDetailID]) as ID,[SalesOrderID] 
+from [Sales].[SalesOrderDetailStaging]
+group by [SalesOrderID]
+having count([SalesOrderID]) > 1
+
+) b
+on a.SalesOrderDetailID = b.ID and a.SalesOrderID = b.SalesOrderID
+
+
+
+
+--Deleting duplicate values
+
+delete t
+from [Sales].[SalesOrderDetailStaging] t
+where [SalesOrderDetailID] in (select a.[SalesOrderDetailID] from[Sales].[SalesOrderDetailStaging] a, (select [SalesOrderDetailID],
+(select MAX ([SalesOrderID]) FROM [Sales].[SalesOrderDetailStaging] i WHERE o.[SalesOrderID] = i.SalesOrderID
+group by [SalesOrderID] 
+having  o.[SalesOrderDetailID]= max(i.SalesOrderDetailID)) as MxValue
+ from [Sales].[SalesOrderDetailStaging] o ) b 
+ where a.SalesOrderDetailID = b.SalesOrderDetailID and b.MxValue is NULL )
+
+
+
+
+
+------------------------------------ "Another solution" ------------------------------
+-- testing columns to find duplictes 
+
+from [Sales].[SalesOrderHeaderStaging]
+group by [SalesOrderNumber]
+
+
+
+--I am using the ROW_NUMBER function to return the sequential number of each row within a partition of a result set which is a grouping based on
+--[PurchaseOrderNumber],[AccountNumber],[CustomerID],[SalesPersonID]
+--and then I am deleting all records except where the sequential number is 1. means keeping one record from the group and deleting all other similar/duplicate records.
+
+-- Using CTE
+
+WITH CTE
+
+ AS
+
+(SELECT ROW_NUMBER() OVER (PARTITION BY 
+
+[PurchaseOrderNumber],[AccountNumber],[CustomerID],[SalesPersonID]
+ORDER BY[PurchaseOrderNumber] desc,[AccountNumber] desc,[CustomerID] desc,[SalesPersonID] desc
+
+)
+AS RowNumber, [PurchaseOrderNumber],[AccountNumber],[CustomerID],[SalesPersonID]
+FROM [Sales].[SalesOrderHeaderStaging]
+
+)
+
+DELETE FROM CTE WHERE RowNumber > 1
+GO
+
+SELECT * FROM [Sales].[SalesOrderHeaderStaging]
+
+GO
+
+
+
+
+
+
+
+
+
+
+--- Scenario 2:
+------New orders came into the staging area for (2008-05-01). Merge these orders with the existing orders for the same date.
+		
+
+
+--- Create a source table  (SalesOrderHeaderStaging_2017)
+
+CREATE TABLE [Sales].[SalesOrderHeaderStaging_2017](
+	[SalesOrderID] [int] IDENTITY(1,1) NOT NULL,
+	[RevisionNumber] [tinyint] NOT NULL,
+	[OrderDate] [datetime] NOT NULL,
+	[DueDate] [datetime] NOT NULL,
+	[ShipDate] [datetime] NULL,
+	[Status] [tinyint] NOT NULL,
+	[OnlineOrderFlag] [bit] NOT NULL,
+	[SalesOrderNumber] [nvarchar](25) NOT NULL,
+	[PurchaseOrderNumber] [nvarchar](25) NULL,
+	[AccountNumber] [nvarchar](15) NULL,
+	[CustomerID] [int] NOT NULL,
+	[SalesPersonID] [int] NULL,
+	[TerritoryID] [int] NULL,
+	[BillToAddressID] [int] NOT NULL,
+	[ShipToAddressID] [int] NOT NULL,
+	[ShipMethodID] [int] NOT NULL,
+	[CreditCardID] [int] NULL,
+	[CreditCardApprovalCode] [varchar](15) NULL,
+	[CurrencyRateID] [int] NULL,
+	[SubTotal] [money] NOT NULL,
+	[TaxAmt] [money] NOT NULL,
+	[Freight] [money] NOT NULL,
+	[TotalDue] [money] NOT NULL,
+	[Comment] [nvarchar](128) NULL,
+	[rowguid] [uniqueidentifier] NOT NULL,
+	[ModifiedDate] [datetime] NOT NULL);
+
+	GO
+
+
+---- Insert data into source table.. New orders came into the staging area for (2008-05-01)
+
+INSERT INTO [Sales].[SalesOrderHeaderStaging_2017]
+
+           select [RevisionNumber]
+           ,[OrderDate]
+           ,[DueDate]
+           ,[ShipDate]
+           ,[Status]
+           ,[OnlineOrderFlag]
+           ,[SalesOrderNumber]
+           ,[PurchaseOrderNumber]
+           ,[AccountNumber]
+           ,[CustomerID]
+           ,[SalesPersonID]
+           ,[TerritoryID]
+           ,[BillToAddressID]
+           ,[ShipToAddressID]
+           ,[ShipMethodID]
+           ,[CreditCardID]
+           ,[CreditCardApprovalCode]
+           ,[CurrencyRateID]
+           ,[SubTotal]
+           ,[TaxAmt]
+           ,[Freight]
+           ,[TotalDue]
+           ,[Comment]
+           ,[rowguid]
+           ,[ModifiedDate]
+    
+	from [Sales].[SalesOrderHeaderStaging]
+	where [OrderDate] = '2008-05-01 00:00:00.000'
+
+	GO
+	
+	--Synchronize the target table with
+    --refreshed data from source table
+	
+		MERGE [Sales].[SalesOrderHeaderStaging] AS TARGET
+	USING [Sales].[SalesOrderHeaderStaging_2017] AS SOURCE
+	on TARGET.[SalesOrderID] = Source.[SalesOrderID]
+
+
+--When records are matched, update 
+--the records if there is any change
+
+WHEN MATCHED AND TARGET.[SalesOrderID] <> SOURCE.[SalesOrderID]
+OR
+TARGET.[AccountNumber] <> SOURCE.[AccountNumber]
+THEN
+
+UPDATE SET 
+TARGET.[SalesOrderID] = SOURCE.[SalesOrderID],
+TARGET.[AccountNumber] = SOURCE.[AccountNumber]
+
+--When no records are matched, insert
+--the incoming records from source
+--table to target table
+
+WHEN NOT MATCHED BY TARGET THEN
+INSERT ([RevisionNumber]
+           ,[OrderDate]
+           ,[DueDate]
+           ,[ShipDate]
+           ,[Status]
+           ,[OnlineOrderFlag]
+           ,[SalesOrderNumber]
+           ,[PurchaseOrderNumber]
+           ,[AccountNumber]
+           ,[CustomerID]
+           ,[SalesPersonID]
+           ,[TerritoryID]
+           ,[BillToAddressID]
+           ,[ShipToAddressID]
+           ,[ShipMethodID]
+           ,[CreditCardID]
+           ,[CreditCardApprovalCode]
+           ,[CurrencyRateID]
+           ,[SubTotal]
+           ,[TaxAmt]
+           ,[Freight]
+           ,[TotalDue]
+           ,[Comment]
+           ,[rowguid]
+           ,[ModifiedDate])
+
+		   VALUES 
+		   (SOURCE.[RevisionNumber]
+           ,SOURCE.[OrderDate]
+           ,SOURCE.[DueDate]
+           ,SOURCE.[ShipDate]
+           ,SOURCE.[Status]
+           ,SOURCE.[OnlineOrderFlag]
+           ,SOURCE.[SalesOrderNumber]
+           ,SOURCE.[PurchaseOrderNumber]
+           ,SOURCE.[AccountNumber]
+           ,SOURCE.[CustomerID]
+           ,SOURCE.[SalesPersonID]
+           ,SOURCE.[TerritoryID]
+           ,SOURCE.[BillToAddressID]
+           ,SOURCE.[ShipToAddressID]
+           ,SOURCE.[ShipMethodID]
+           ,SOURCE.[CreditCardID]
+           ,SOURCE.[CreditCardApprovalCode]
+           ,SOURCE.[CurrencyRateID]
+           ,SOURCE.[SubTotal]
+           ,SOURCE.[TaxAmt]
+           ,SOURCE.[Freight]
+           ,SOURCE.[TotalDue]
+           ,SOURCE.[Comment]
+           ,SOURCE.[rowguid]
+           ,SOURCE.[ModifiedDate])
+		   
+		   
+
+--When there is a row that exists in target table and
+--same record does not exist in source table
+--then delete this record from target tablE
+
+WHEN NOT MATCHED BY SOURCE THEN 
+DELETE;
+
+
+/* I ran the query, got this error message: Msg 8102, Level 16, State 1, Line 37
+Cannot update identity column 'SalesOrderID'.     Note..I had no time to invitigate 
+
+*/
+
+
+
+
+
+
+
+
+
+
+
+/* Scenario 3:
+		Steve is a warehouse supervisor with a staff of four to pick the orders. Before the beginning of each shift, Steve splits all of the orders for the day into four lists, one for each of his staff. 
+		Tonight (2008-05-01), Bob called in sick. Write a query to split the orders into three equal lists.
+		*/
+		
+		
+		
+		
+DECLARE @SegmentCount int = 0;
+SELECT @SegmentCount = 3;
+;WITH vals(val) AS (
+SELECT 43659 + convert(bigint,[SalesOrderID] ) AS [val]
+  FROM [Sales].[SalesOrderHeader]
+ WHERE [SalesOrderID] BETWEEN 1 AND 40772 and [ModifiedDate] != '2008-05-01'
+)
+select [TheTile] as " The Range" , min(val) AS RangeStart, max(val) AS [RangeEnd]
+FROM (
+        SELECT NTILE(@SegmentCount) OVER (ORDER BY val) AS [TheTile], val
+          FROM vals
+
+        ) a
+
+GROUP BY [TheTile]
+ORDER BY [TheTile]
+
+; 
+
+-- just not sure why I have empty results - NOT enough time to figuer it out 
